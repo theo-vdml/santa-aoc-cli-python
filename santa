@@ -1,0 +1,663 @@
+#!/usr/bin/env python3
+"""
+🎅 santa - Advent of Code Runner
+
+Usage:
+    ./santa                      Run the last/most recent day
+    ./santa 1                    Run day 1 with inputs/01.txt
+    ./santa 1 --test             Run day 1 with inputs/01_test.txt
+    ./santa 1 --file custom.txt  Run day 1 with custom input file
+    ./santa 1 --one              Run ONLY part one
+    ./santa 1 --two              Run ONLY part two
+    ./santa 1 --average 100      Run 100 times, show average performance
+    ./santa 5-10                 Run days 5 through 10
+    ./santa --all                Run ALL completed days
+    ./santa --init 3             Initialize day 3 files (including test input)
+    ./santa --clean 3            Delete day 3 files (careful!)
+    ./santa --help               Show this message
+
+Examples:
+    ./santa                      # Run latest day
+    ./santa 12                   # Run day 12 with real input
+    ./santa 12 --test            # Run day 12 with test input
+    ./santa 12 --one             # Run ONLY part one
+    ./santa 12 --two --average 50  # Benchmark part two, 50 runs
+    ./santa 10-15                # Run days 10-15
+    ./santa --all                # Run everything
+"""
+
+
+import sys
+import importlib.util
+from pathlib import Path
+import time
+from typing import Optional
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    # Fallback: no progress bar
+    tqdm = lambda x, **kwargs: x
+
+
+class Colors:
+    """Terminal colors because we're not cavemen."""
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+    END = '\033[0m'
+
+
+# ============================================================================
+# DAY RUNNING LOGIC
+# ============================================================================
+
+def load_day_module(day_num: int):
+    """Dynamically load a day module."""
+    day_file = Path(f"day/{day_num:02d}.py")
+    
+    if not day_file.exists():
+        return None
+    
+    spec = importlib.util.spec_from_file_location(f"day{day_num:02d}", day_file)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    
+    return module
+
+
+def load_input(day_num: int, test: bool = False, custom_file: Optional[str] = None) -> tuple[Optional[str], str]:
+    """
+    Load input file.
+    
+    Returns:
+        tuple: (input_data, file_description)
+    """
+    if custom_file:
+        input_file = Path(custom_file)
+        file_desc = f"custom file: {custom_file}"
+    elif test:
+        input_file = Path(f"inputs/{day_num:02d}_test.txt")
+        file_desc = f"test input: {input_file}"
+    else:
+        input_file = Path(f"inputs/{day_num:02d}.txt")
+        file_desc = f"real input: {input_file}"
+    
+    if not input_file.exists():
+        return None, file_desc
+    
+    content = input_file.read_text().strip()
+    if not content:
+        return None, file_desc
+    
+    return content, file_desc
+
+
+
+def run_day(day_num: int, verbose: bool = True, test: bool = False, 
+            custom_file: Optional[str] = None, only_part: Optional[int] = None,
+            average_runs: int = 1) -> dict:
+    """
+    Run a day's solution.
+
+    Args:
+        only_part: 1 or 2 to run only that part, None for both
+        average_runs: Number of times to run for averaging (default: 1)
+
+    Returns:
+        dict with 'success', 'part1', 'part2', 'time1', 'time2', 'error', 'input_desc'
+    """
+    result = {
+        'success': False,
+        'part1': None,
+        'part2': None,
+        'time1': 0,
+        'time2': 0,
+        'error': None,
+        'input_desc': None,
+        'avg_time1': 0,
+        'avg_time2': 0,
+        'runs': average_runs
+    }
+
+    if verbose:
+        print(f"\n{Colors.BOLD}{'='*60}{Colors.END}")
+        avg_str = f" (averaging {average_runs} runs)" if average_runs > 1 else ""
+        part_str = f" - Part {only_part} ONLY" if only_part else ""
+        print(f"{Colors.HEADER}🎄 Advent of Code - Day {day_num:02d}{part_str}{avg_str} 🎄{Colors.END}")
+        print(f"{Colors.BOLD}{'='*60}{Colors.END}\n")
+
+    module = load_day_module(day_num)
+    if not module:
+        result['error'] = f"Day {day_num:02d}.py not found"
+        if verbose:
+            print(f"{Colors.RED}❌ {result['error']}{Colors.END}")
+            print(f"{Colors.YELLOW}💡 Hint: ./santa --init {day_num}{Colors.END}")
+        return result
+
+    input_data, file_desc = load_input(day_num, test, custom_file)
+    result['input_desc'] = file_desc
+
+    if not input_data:
+        result['error'] = f"Input file not found or empty: {file_desc}"
+        if verbose:
+            print(f"{Colors.RED}❌ {result['error']}{Colors.END}")
+            if test:
+                print(f"{Colors.YELLOW}💡 Put test input in: inputs/{day_num:02d}_test.txt{Colors.END}")
+            elif not custom_file:
+                print(f"{Colors.YELLOW}💡 Download from: https://adventofcode.com/2025/day/{day_num}/input{Colors.END}")
+        return result
+
+    if verbose:
+        emoji = "🧪" if test else "📝" if custom_file else "🎯"
+        print(f"{Colors.CYAN}{emoji} Using: {file_desc}{Colors.END}\n")
+
+    if not hasattr(module, 'Solution'):
+        result['error'] = "No Solution class found"
+        if verbose:
+            print(f"{Colors.RED}❌ {result['error']}{Colors.END}")
+        return result
+
+    Solution = module.Solution
+
+    try:
+        # ====================================================================
+        # PART 1
+        # ====================================================================
+        if only_part in (None, 1):
+            if verbose:
+                print(f"{Colors.CYAN}⭐ Part 1{Colors.END}")
+                print("-" * 60)
+
+            times = []
+            
+            if verbose and average_runs > 1:
+                print(f"{Colors.YELLOW}⏱️ Running {average_runs} iterations...{Colors.END}")
+                
+            # ⏱️   loop with progress bar
+            iterator = range(average_runs)
+            if average_runs > 1 and verbose:
+                iterator = tqdm(
+                    iterator,
+                    desc=f"{Colors.YELLOW}⌛ {Colors.END}",
+                    unit="run",
+                    bar_format='{desc}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]',
+                    leave=False,
+                    ascii=True
+                )
+                
+            for _ in iterator:
+                start = time.perf_counter()
+                solution_1 = Solution(input_data)
+                answer = solution_1.part_one()
+                elapsed = time.perf_counter() - start
+                times.append(elapsed)
+
+                # Store first result
+                if len(times) == 1:
+                    result['part1'] = answer
+
+            result['time1'] = times[0]
+            result['avg_time1'] = sum(times) / len(times)
+
+            if verbose:
+                print(f"{Colors.GREEN}✅ Result: {result['part1']}{Colors.END}")
+                
+                if average_runs == 1:
+                    print(f"{Colors.YELLOW}⏱️  Time: {result['time1']*1000:.2f}ms{Colors.END}\n")
+                else:
+                    min_time = min(times)
+                    max_time = max(times)
+                    range_time = max_time - min_time
+                    
+                    print(f"{Colors.YELLOW}⏱️  First:   {result['time1']*1000:>7.2f}ms{Colors.END}")
+                    print(f"{Colors.YELLOW}⏱️  Average: {result['avg_time1']*1000:>7.2f}ms  (±{range_time*1000:.2f}ms){Colors.END}")
+                    print(f"{Colors.YELLOW}⏱️  Best:    {min_time*1000:>7.2f}ms{Colors.END}")
+                    print(f"{Colors.YELLOW}⏱️  Worst:   {max_time*1000:>7.2f}ms{Colors.END}")                    
+                    print()
+
+        # ====================================================================
+        # PART 2
+        # ====================================================================
+        if only_part in (None, 2):
+            if verbose:
+                print(f"{Colors.CYAN}⭐⭐ Part 2{Colors.END}")
+                print("-" * 60)
+
+            times = []
+            if verbose and average_runs > 1:
+                print(f"{Colors.YELLOW}⏱️ Running {average_runs} iterations...{Colors.END}")
+            
+            
+            iterator = range(average_runs)
+            if average_runs > 1 and verbose:
+                iterator = tqdm(
+                    iterator,
+                    desc=f"{Colors.YELLOW}⌛ {Colors.END}",
+                    unit="run",
+                    bar_format='{desc}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]',
+                    leave=False,
+                    ascii=True
+                )
+                
+            
+            for _ in iterator:
+                start = time.perf_counter()
+                solution_2 = Solution(input_data)
+                answer = solution_2.part_two()
+                elapsed = time.perf_counter() - start
+                times.append(elapsed)
+
+                if len(times) == 1:
+                    result['part2'] = answer
+
+            result['time2'] = times[0]
+            result['avg_time2'] = sum(times) / len(times)
+
+            if verbose:
+                print(f"{Colors.GREEN}✅ Result: {result['part2']}{Colors.END}")
+                
+                if average_runs == 1:
+                    print(f"{Colors.YELLOW}⏱️  Time: {result['time2']*1000:.2f}ms{Colors.END}\n")
+                else:
+                    min_time = min(times)
+                    max_time = max(times)
+                    range_time = max_time - min_time
+                    
+                    print(f"{Colors.YELLOW}⏱️  First:   {result['time2']*1000:>7.2f}ms{Colors.END}")
+                    print(f"{Colors.YELLOW}⏱️  Average: {result['avg_time2']*1000:>7.2f}ms  (±{range_time*1000:.2f}ms){Colors.END}")
+                    print(f"{Colors.YELLOW}⏱️  Best:    {min_time*1000:>7.2f}ms{Colors.END}")
+                    print(f"{Colors.YELLOW}⏱️  Worst:   {max_time*1000:>7.2f}ms{Colors.END}")                    
+                    print()
+
+        # ====================================================================
+        # TOTAL TIME SUMMARY
+        # ====================================================================
+        if verbose and only_part is None:
+            total_time = result['time1'] + result['time2']
+            total_avg = result['avg_time1'] + result['avg_time2']
+            
+            print(f"{Colors.BOLD}{'='*60}{Colors.END}")
+            if average_runs == 1:
+                print(f"{Colors.YELLOW}⏱️  Total: {total_time*1000:.2f}ms{Colors.END}")
+            else:
+                print(f"{Colors.YELLOW}⏱️  Total (first run):  {total_time*1000:.2f}ms{Colors.END}")
+                print(f"{Colors.YELLOW}⏱️  Total (average):    {total_avg*1000:.2f}ms{Colors.END}")
+            print(f"{Colors.BOLD}{'='*60}{Colors.END}\n")
+
+        result['success'] = True
+
+    except Exception as e:
+        result['error'] = str(e)
+        if verbose:
+            print(f"{Colors.RED}❌ Error: {e}{Colors.END}\n")
+            import traceback
+            if '--debug' in sys.argv:
+                traceback.print_exc()
+
+    return result
+
+
+def run_multiple_days(days: list[int]):
+    """Run multiple days and show summary."""
+    print(f"\n{Colors.BOLD}{Colors.HEADER}{'='*60}")
+    print(f"🎅 Running {len(days)} days of Advent of Code 🎅")
+    print(f"{'='*60}{Colors.END}\n")
+    
+    results = []
+    total_time = 0
+    
+    for day in days:
+        result = run_day(day, verbose=False)
+        results.append((day, result))
+        
+        if result['success']:
+            day_time = result['time1'] + result['time2']
+            total_time += day_time
+            status = f"{Colors.GREEN}✅{Colors.END}"
+            time_str = f"{day_time*1000:>8.2f}ms"
+        else:
+            status = f"{Colors.RED}❌{Colors.END}"
+            time_str = f"{Colors.RED}{'FAILED':>8}{Colors.END}"
+        
+        p1_str = str(result['part1'])[:20] if result['part1'] is not None else "N/A"
+        p2_str = str(result['part2'])[:20] if result['part2'] is not None else "N/A"
+        
+        print(f"Day {day:02d}: {status}  {time_str}  "
+              f"P1: {p1_str:<20}  "
+              f"P2: {p2_str:<20}")
+    
+    print(f"\n{Colors.BOLD}{'='*60}{Colors.END}")
+    successful = sum(1 for _, r in results if r['success'])
+    print(f"{Colors.GREEN}✅ Completed: {successful}/{len(days)}{Colors.END}")
+    if total_time > 0:
+        print(f"{Colors.YELLOW}⏱️  Total time: {total_time*1000:.2f}ms{Colors.END}")
+    print(f"{Colors.BOLD}{'='*60}{Colors.END}\n")
+
+
+def get_last_day() -> Optional[int]:
+    """Find the most recent day file."""
+    day_files = sorted(Path('day').glob('[0-9][0-9].py'))
+    if not day_files:
+        return None
+    return int(day_files[-1].stem)
+
+
+def get_all_days() -> list[int]:
+    """Get all existing day files."""
+    day_files = sorted(Path('day').glob('[0-9][0-9].py'))
+    return [int(f.stem) for f in day_files]
+
+
+# ============================================================================
+# INITIALIZATION LOGIC
+# ============================================================================
+
+def init_day(day_num: int, force: bool = False):
+    """Initialize files for a new day."""
+    if not 1 <= day_num <= 25:
+        print(f"{Colors.RED}❌ Day must be between 1 and 25{Colors.END}")
+        return False
+    
+    day_padded = f"{day_num:02d}"
+    day_file = Path(f"day/{day_padded}.py")
+    input_file = Path(f"inputs/{day_padded}.txt")
+    test_file = Path(f"inputs/{day_padded}_test.txt")
+    template_file = Path("day_template.py")
+    
+    # Check if template exists
+    if not template_file.exists():
+        print(f"{Colors.RED}❌ day_template.py not found!{Colors.END}")
+        return False
+    
+    # Check if day already exists
+    if day_file.exists() and not force:
+        print(f"{Colors.YELLOW}⚠️  day/{day_padded}.py already exists!{Colors.END}")
+        response = input("Overwrite? (y/N): ").strip().lower()
+        if response != 'y':
+            print("Cancelled.")
+            return False
+    
+    # Create day file from template
+    import shutil
+    shutil.copy(template_file, day_file)
+    
+    # Replace placeholders in template
+    content = day_file.read_text()
+    content = content.replace("Day XX", f"Day {day_num:02d}")
+    content = content.replace("adventofcode.com/2025/day/XX", 
+                             f"adventofcode.com/2025/day/{day_num}")
+    day_file.write_text(content)
+    
+    # Create empty input files
+    if not input_file.exists():
+        input_file.touch()
+    if not test_file.exists():
+        test_file.touch()
+    
+    print(f"{Colors.GREEN}✅ Created day/{day_padded}.py{Colors.END}")
+    print(f"{Colors.GREEN}✅ Created inputs/{day_padded}.txt{Colors.END}")
+    print(f"{Colors.GREEN}✅ Created inputs/{day_padded}_test.txt{Colors.END}")
+    print()
+    print(f"{Colors.BOLD}Next steps:{Colors.END}")
+    print(f"  1. Read problem: {Colors.CYAN}https://adventofcode.com/2025/day/{day_num}{Colors.END}")
+    print(f"  2. Paste test input → {Colors.CYAN}inputs/{day_padded}_test.txt{Colors.END}")
+    print(f"  3. Download real input → {Colors.CYAN}inputs/{day_padded}.txt{Colors.END}")
+    print(f"     (from https://adventofcode.com/2025/day/{day_num}/input)")
+    print(f"  4. Code solution: {Colors.CYAN}day/{day_padded}.py{Colors.END}")
+    print(f"  5. Test with: {Colors.CYAN}./santa {day_num} --test{Colors.END}")
+    print(f"  6. Run real: {Colors.CYAN}./santa {day_num}{Colors.END}")
+    print()
+    
+    return True
+
+
+def clean_day(day_num: int):
+    """Delete day files (with confirmation)."""
+    if not 1 <= day_num <= 25:
+        print(f"{Colors.RED}❌ Day must be between 1 and 25{Colors.END}")
+        return False
+    
+    day_padded = f"{day_num:02d}"
+    day_file = Path(f"day/{day_padded}.py")
+    input_file = Path(f"inputs/{day_padded}.txt")
+    test_file = Path(f"inputs/{day_padded}_test.txt")
+    
+    files_to_delete = []
+    if day_file.exists():
+        files_to_delete.append(f"day/{day_padded}.py")
+    if input_file.exists():
+        files_to_delete.append(f"inputs/{day_padded}.txt")
+    if test_file.exists():
+        files_to_delete.append(f"inputs/{day_padded}_test.txt")
+    
+    if not files_to_delete:
+        print(f"{Colors.YELLOW}⚠️  No files found for day {day_num}{Colors.END}")
+        return False
+    
+    print(f"{Colors.YELLOW}⚠️  This will DELETE:{Colors.END}")
+    for f in files_to_delete:
+        print(f"    - {f}")
+    
+    response = input(f"\n{Colors.RED}Are you SURE? Type 'yes' to confirm: {Colors.END}").strip()
+    
+    if response == 'yes':
+        if day_file.exists():
+            day_file.unlink()
+        if input_file.exists():
+            input_file.unlink()
+        if test_file.exists():
+            test_file.unlink()
+        print(f"{Colors.GREEN}🗑️  Deleted day {day_num} files{Colors.END}")
+        return True
+    else:
+        print("Cancelled.")
+        return False
+
+
+# ============================================================================
+# ARGUMENT PARSING
+# ============================================================================
+
+def show_help():
+    """Show help message."""
+    print(__doc__)
+
+
+def parse_args():
+    """
+    Parse arguments and return action.
+
+    Returns:
+        tuple: (action, data, kwargs)
+            action: 'run', 'run_all', 'init', 'clean', 'help'
+            data: day number(s) or None
+            kwargs: dict with 'test', 'custom_file', 'only_part', 'average_runs'
+    """
+    kwargs = {
+        'test': False, 
+        'custom_file': None,
+        'only_part': None,
+        'average_runs': 1
+    }
+
+    if len(sys.argv) == 1:
+        return ('run_last', None, kwargs)
+
+    arg = sys.argv[1]
+
+    # Help
+    if arg in ['--help', '-h', 'help']:
+        return ('help', None, kwargs)
+
+    # Run all
+    if arg == '--all':
+        return ('run_all', None, kwargs)
+
+    # Init day
+    if arg == '--init':
+        if len(sys.argv) < 3:
+            print(f"{Colors.RED}❌ Usage: ./santa --init <day>{Colors.END}")
+            sys.exit(1)
+        try:
+            day = int(sys.argv[2])
+            return ('init', day, kwargs)
+        except ValueError:
+            print(f"{Colors.RED}❌ Invalid day number: {sys.argv[2]}{Colors.END}")
+            sys.exit(1)
+
+    # Clean day
+    if arg == '--clean':
+        if len(sys.argv) < 3:
+            print(f"{Colors.RED}❌ Usage: ./santa --clean <day>{Colors.END}")
+            sys.exit(1)
+        try:
+            day = int(sys.argv[2])
+            return ('clean', day, kwargs)
+        except ValueError:
+            print(f"{Colors.RED}❌ Invalid day number: {sys.argv[2]}{Colors.END}")
+            sys.exit(1)
+
+    # Parse flags for run commands
+    if '--test' in sys.argv:
+        kwargs['test'] = True
+
+    if '--one' in sys.argv:
+        kwargs['only_part'] = 1
+
+    if '--two' in sys.argv:
+        kwargs['only_part'] = 2
+
+    if '--one' in sys.argv and '--two' in sys.argv:
+        print(f"{Colors.RED}❌ Can't use --one and --two together. Pick one, genius.{Colors.END}")
+        sys.exit(1)
+
+    if '--average' in sys.argv:
+        try:
+            avg_idx = sys.argv.index('--average')
+            if avg_idx + 1 >= len(sys.argv):
+                print(f"{Colors.RED}❌ --average requires a number{Colors.END}")
+                sys.exit(1)
+            kwargs['average_runs'] = int(sys.argv[avg_idx + 1])
+            if kwargs['average_runs'] < 1:
+                print(f"{Colors.RED}❌ --average must be >= 1{Colors.END}")
+                sys.exit(1)
+        except ValueError:
+            print(f"{Colors.RED}❌ Invalid number for --average{Colors.END}")
+            sys.exit(1)
+
+    if '--file' in sys.argv:
+        try:
+            file_idx = sys.argv.index('--file')
+            if file_idx + 1 >= len(sys.argv):
+                print(f"{Colors.RED}❌ --file requires a filename{Colors.END}")
+                sys.exit(1)
+            kwargs['custom_file'] = sys.argv[file_idx + 1]
+        except ValueError:
+            pass
+
+    # Range: 1-5
+    if '-' in arg and arg[0].isdigit():
+        if kwargs['only_part'] or kwargs['average_runs'] > 1:
+            print(f"{Colors.YELLOW}⚠️  --one, --two, and --average don't work with ranges{Colors.END}")
+            sys.exit(1)
+        try:
+            start, end = map(int, arg.split('-'))
+            if not (1 <= start <= 25 and 1 <= end <= 25 and start <= end):
+                print(f"{Colors.RED}❌ Invalid range. Days must be 1-25.{Colors.END}")
+                sys.exit(1)
+            return ('run_range', list(range(start, end + 1)), kwargs)
+        except ValueError:
+            print(f"{Colors.RED}❌ Invalid range format. Use: 1-5{Colors.END}")
+            sys.exit(1)
+
+    # Single day
+    try:
+        day = int(arg)
+        if not 1 <= day <= 25:
+            print(f"{Colors.RED}❌ Day must be between 1 and 25{Colors.END}")
+            sys.exit(1)
+        return ('run', day, kwargs)
+    except ValueError:
+        print(f"{Colors.RED}❌ Invalid argument: {arg}{Colors.END}")
+        print(f"{Colors.YELLOW}💡 Try: ./santa --help{Colors.END}")
+        sys.exit(1)
+
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
+def main():
+    """Main entry point."""
+    
+    # Auto-create project structure because we're nice (and lazy)
+    Path("day").mkdir(exist_ok=True)
+    Path("inputs").mkdir(exist_ok=True)
+    
+    if not Path("day/__init__.py").exists():
+        Path("day/__init__.py").touch()
+        print(f"{Colors.GREEN}✓ Created day/__init__.py{Colors.END}")
+    
+    try:
+        action, data, kwargs = parse_args()
+        
+        if action == 'help':
+            show_help()
+        
+        elif action == 'init':
+            init_day(data)
+        
+        elif action == 'clean':
+            clean_day(data)
+        
+        elif action == 'run':
+            run_day(data, **kwargs)
+        
+        elif action == 'run_last':
+            last = get_last_day()
+            if last is None:
+                print(f"{Colors.RED}❌ No days found{Colors.END}")
+                print(f"{Colors.YELLOW}💡 Create one with: ./santa --init 1{Colors.END}")
+                sys.exit(1)
+            mode = "test" if kwargs['test'] else "custom" if kwargs['custom_file'] else "real"
+            print(f"{Colors.CYAN}🎅 Running most recent day ({last}) with {mode} input{Colors.END}")
+            run_day(last, **kwargs)
+        
+        elif action == 'run_all':
+            if kwargs['test'] or kwargs['custom_file'] or kwargs['only_part'] or kwargs['average_runs'] > 1:
+                print(f"{Colors.YELLOW}⚠️  --test, --file, --one, --two, and --average don't work with --all{Colors.END}")
+                print(f"    Use specific day numbers instead.")
+                sys.exit(1)
+            days = get_all_days()
+            if not days:
+                print(f"{Colors.RED}❌ No days found{Colors.END}")
+                print(f"{Colors.YELLOW}💡 Create one with: ./santa --init 1{Colors.END}")
+                sys.exit(1)
+            run_multiple_days(days)
+        
+        elif action == 'run_range':
+            if kwargs['test'] or kwargs['custom_file']:
+                print(f"{Colors.YELLOW}⚠️  --test and --file don't work with ranges{Colors.END}")
+                print(f"    Use a specific day number instead.")
+                sys.exit(1)
+            run_multiple_days(data)
+    
+    except KeyboardInterrupt:
+        print(f"\n\n{Colors.YELLOW}👋 Santa's disappointed, but he understands.{Colors.END}")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n{Colors.RED}💥 Unexpected error: {e}{Colors.END}")
+        if '--debug' in sys.argv:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
