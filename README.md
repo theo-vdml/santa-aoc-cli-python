@@ -8,6 +8,7 @@ A lightweight CLI boilerplate for solving [Advent of Code](https://adventofcode.
 
 -   **Simple CLI** - Run solutions with `./santa [day]`
 -   **Auto-initialization** - Scaffold new days with `--init`
+-   **Auto input injection** - No need to read files yourself, santa handles it
 -   **Test mode** - Separate test inputs for debugging
 -   **Benchmarking** - Average runtime over multiple runs
 -   **Range execution** - Run multiple days at once
@@ -58,6 +59,34 @@ class Solution:
 ./santa 1           # Run with real input
 ./santa 1 --test    # Run with test input
 ```
+
+## How It Works
+
+The `santa` CLI automatically handles input file reading for you:
+
+1. You run `./santa 1`
+2. Santa reads `inputs/01.txt` (or `01_test.txt` with `--test`)
+3. The file content is passed directly to your `Solution.__init__(input_data)` constructor
+4. You just parse and solve - no file I/O needed!
+
+**Example:**
+
+```python
+# inputs/01.txt contains:
+# 1 2 3
+# 4 5 6
+
+class Solution:
+    def __init__(self, input_data: str):
+        # input_data is already the file contents!
+        lines = input_data.strip().split('\n')
+        self.grid = [list(map(int, line.split())) for line in lines]
+        
+    def part_one(self) -> int:
+        return sum(sum(row) for row in self.grid)  # Returns 21
+```
+
+No `open()`, no `with`, no file paths - just focus on solving the puzzle.
 
 ## Usage
 
